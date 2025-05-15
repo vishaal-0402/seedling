@@ -1,0 +1,65 @@
+name: Build & Push sggateway
+
+on:
+  push:
+    branches:
+      - dev
+
+  workflow_dispatch:  # ✅ Manual trigger support
+    inputs:
+      tag_suffix:
+        description: 'Custom QA tag suffix (e.g., qa105 or test123)'
+        required: false
+        default: ''
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout Code
+        uses: actions/checkout@v3
+
+      - name: Set up Java 21 (Temurin)
+        uses: actions/setup-java@v4
+        with:
+          distribution: 'temurin'
+          java-version: '21'
+
+      - name: Make mvnw executable
+        run: chmod +x ./sggateway/mvnw
+
+      - name: Create empty sonar-project.properties (temporary workaround)
+        run: touch ./sggateway/sonar-project.properties
+
+      - name: Build with Maven (CI profile, prod profile, skip tests and sonar)
+        working-directory: ./sggateway
+        run: ./mvnw clean package -Pprod,ci -DskipTests -X
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Calculate image tag
+        id: tag
+        run: |
+          if [[ -n "${{ github.event.inputs.tag_suffix }}" ]]; then
+            echo "tag_name=sggateway_${{ github.event.inputs.tag_suffix }}" >> "$GITHUB_OUTPUT"
+          else
+            TAG_NUM=$(( (GITHUB_RUN_NUMBER % 100) + 1 ))
+            echo "tag_name=sggateway_qa$TAG_NUM" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build & Push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: ./sggateway
+          file: ./sggateway/Dockerfile
+          push: true
+          tags: |
+            seedlingsocialgiving/seedling:${{ steps.tag.outputs.tag_name }}
